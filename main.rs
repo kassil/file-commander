@@ -6,8 +6,8 @@ use std::io;
 
 struct DirView {
     window: WINDOW, // ncurses window
-    selected: i32, // Selected row (absolute index)
-    scroll_offset: i32, // First visible entry index
+    selected: usize, // Selected row (absolute index)
+    scroll_offset: usize, // First visible entry index
     dirents: Vec<fs::DirEntry>, // Directory entries
     path: std::path::PathBuf, // Path
 }
@@ -30,7 +30,7 @@ impl DirView {
             path: path.to_path_buf(),
         })
     }
-    fn draw(&self) {
+    fn draw(&self, w_debug: WINDOW) {
         // Drawing logic moved to main loop for better control
         werase(self.window);
         box_(self.window, 0, 0);
@@ -39,24 +39,24 @@ impl DirView {
         let win_height = getmaxy(self.window);
         let list_height = win_height - 2; // Adjust for borders
 
-         // Display directory entries with scrolling
+        // Display directory entries with scrolling
+        waddstr(w_debug, &format!("Sc{} Sel{} ", self.scroll_offset, self.selected));
         for (i, entry) in self.dirents.iter().enumerate()
-            .skip(self.scroll_offset as usize)
-            .take(list_height as usize)  // As many as fit in the window
+            .skip(self.scroll_offset)       // Top of page
+            .take(list_height as usize)     // As many as fit in the window
         {
-            if i >= (win_height - 2) as usize {
-                break;
-            }
+            waddstr(w_debug, &format!(" {}", i));
             let file_name = entry.file_name();
             let file_name_str = file_name.to_string_lossy();
-            if i as i32 == self.selected {
+            if i == self.selected {
                 wattron(self.window, A_REVERSE);
             }
-            mvwaddstr(self.window, (i + 1) as i32, 1, &file_name_str);
-            if i as i32 == self.selected {
+            mvwaddstr(self.window, (i + 1 - self.scroll_offset) as i32, 1, &file_name_str);
+            if i == self.selected {
                 wattroff(self.window, A_REVERSE);
             }
         }
+        waddstr(w_debug, "\n"); // Newline in debug window
         mvwaddstr(self.window, win_height - 1, 2, "Use arrow keys to move, 'q' to quit.");
         wrefresh(self.window);
     }
@@ -69,6 +69,11 @@ fn main() {
     //start_color();
     //init_pair(1, COLOR_CYAN, COLOR_BLACK);
     //init_pair(2, COLOR_YELLOW, COLOR_BLACK);
+
+    let w_debug = newwin(getmaxy(stdscr()), getmaxx(stdscr())/2, 0, 0);
+    keypad(w_debug, true);
+    scrollok(w_debug, true);
+    waddstr(w_debug, "Debug Window\n");
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
 
@@ -86,7 +91,9 @@ fn main() {
         .expect("Failed to initialize DirView");
 
     loop {
-        DirView::draw(&dirview);
+        DirView::draw(&dirview, w_debug);
+
+        wrefresh(w_debug);
 
         let ch = wgetch(dirview.window);
         match ch {
@@ -98,20 +105,22 @@ fn main() {
                         // Scroll up
                         dirview.scroll_offset -= 1;
                     }
+                    waddstr(w_debug, &format!("KUP Sel{} Scr{}\n", dirview.selected, dirview.scroll_offset));
                 } else {
                     // Bell on attempt to move above first entry
                     beep();
                 }
             }
             KEY_DOWN => {
-                let list_height = win_height - 2; // Adjust for borders
-                if dirview.selected + 1  < dirview.dirents.len() as i32 {
+                if dirview.selected + 1 < dirview.dirents.len() {
+                    let list_height = win_height - 2; // Adjust for borders
                     // Move cursor down to next entry
                     dirview.selected += 1;
-                    if dirview.selected >= dirview.scroll_offset + list_height {
+                    if dirview.selected >= dirview.scroll_offset + list_height as usize {
                         // Scroll down
                         dirview.scroll_offset += 1;
                     }
+                    waddstr(w_debug, &format!("KDOWN Sel{} Scr{} LD{} N{}\n", dirview.selected, dirview.scroll_offset, list_height, dirview.dirents.len()));
                 }
                 else {
                     // Bell on attempt to move below last entry
@@ -125,6 +134,7 @@ fn main() {
             //    // Handle resize: recalculate sizes, recreate windows, etc.
             _ => {}
         }
+        wrefresh(w_debug);
     }
 
     delwin(dirview.window);
