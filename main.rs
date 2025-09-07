@@ -1,8 +1,10 @@
 extern crate ncurses;
 
 use ncurses::*;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::iter;
 
 struct DirView {
     window: WINDOW, // ncurses window
@@ -77,16 +79,17 @@ impl DirView {
         match &self.dirents {
             Ok(dirents) => {
                 let list_height = win_height - 2; // Adjust for borders
-
                 // Display directory entries with scrolling
+                // Add parent entry at the top
                 waddstr(w_debug, &format!("Sc{} Sel{} ", self.scroll_offset, self.selected));
-                for (i, entry) in dirents.iter()
+                let combined_entries = iter::once(OsString::from(".."))
+                    .chain(dirents.iter().map(|e| e.file_name()));
+                for (i, file_name) in combined_entries
                     .enumerate()
                     .skip(self.scroll_offset)       // Top of page
                     .take(list_height as usize)     // As many as fit in the window
                 {
                     waddstr(w_debug, &format!(" {}", i));
-                    let file_name = entry.file_name();
                     let file_name_str = file_name.to_string_lossy();
                     if i == self.selected {
                         wattron(self.window, A_REVERSE);
@@ -216,6 +219,7 @@ fn main() {
     endwin();
 }
 
+/// Read the contents of a directory and return the entries.
 /// Returns a Vec of DirEntry for the given directory path.
 /// Returns an io::Error if the directory can't be read.
 fn read_directory_contents(path: &str) -> io::Result<Vec<fs::DirEntry>> {
