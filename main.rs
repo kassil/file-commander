@@ -6,23 +6,59 @@ use std::io;
 
 struct DirView {
     window: WINDOW, // ncurses window
-    row: i32,      // Current row in the directory listing
+    selected: i32, // Selected row (absolute index)
+    scroll_offset: i32, // First visible entry index
     dirents: Vec<fs::DirEntry>, // Directory entries
-    cwd: std::path::PathBuf, // Path
+    path: std::path::PathBuf, // Path
 }
 
 impl DirView {
     fn new(win_height: i32, win_width: i32, win_starty: i32, win_startx: i32, path: &std::path::Path) -> io::Result<Self> {
+        // Throw if win_height or win_width is less than 3
+        if win_height < 3 || win_width < 3 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Window height and width must be at least 3"));
+        }
         let window = newwin(win_height, win_width, win_starty, win_startx);
         keypad(window, true);
         scrollok(window, true);
         let dirents = read_directory_contents(path.to_str().unwrap())?;
         Ok(DirView {
             window,
-            row: 0,
+            selected: 0,
+            scroll_offset: 0,
             dirents,
-            cwd: path.to_path_buf(),
+            path: path.to_path_buf(),
         })
+    }
+    fn draw(&self) {
+        // Drawing logic moved to main loop for better control
+        werase(self.window);
+        box_(self.window, 0, 0);
+        mvwaddstr(self.window, 0, 2, self.path.to_str().unwrap());
+
+        let win_height = getmaxy(self.window);
+        let list_height = win_height - 2; // Adjust for borders
+
+         // Display directory entries with scrolling
+        for (i, entry) in self.dirents.iter().enumerate()
+            .skip(self.scroll_offset as usize)
+            .take(list_height as usize)  // As many as fit in the window
+        {
+            if i >= (win_height - 2) as usize {
+                break;
+            }
+            let file_name = entry.file_name();
+            let file_name_str = file_name.to_string_lossy();
+            if i as i32 == self.selected {
+                wattron(self.window, A_REVERSE);
+            }
+            mvwaddstr(self.window, (i + 1) as i32, 1, &file_name_str);
+            if i as i32 == self.selected {
+                wattroff(self.window, A_REVERSE);
+            }
+        }
+        mvwaddstr(self.window, win_height - 1, 2, "Use arrow keys to move, 'q' to quit.");
+        wrefresh(self.window);
     }
 }
 
@@ -30,53 +66,63 @@ fn main() {
     initscr();
     noecho();
     curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
-    start_color();
-    init_pair(1, COLOR_CYAN, COLOR_BLACK);
-    init_pair(2, COLOR_YELLOW, COLOR_BLACK);
-
-    let mut max_y = 0;
-    let mut max_x = 0;
-    getmaxyx(stdscr(), &mut max_y, &mut max_x);
-
-    let win_height = max_y;
-    let win_width = max_x / 2;
-    let win_starty = 0;
-    let win_startx = max_x / 2;
+    //start_color();
+    //init_pair(1, COLOR_CYAN, COLOR_BLACK);
+    //init_pair(2, COLOR_YELLOW, COLOR_BLACK);
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
+
+    let (win_height, win_width, win_starty, win_startx);
+    {
+        // Get terminal size
+        let max_y = getmaxy(stdscr());
+        let max_x = getmaxx(stdscr());
+        win_height = max_y;
+        win_width = max_x / 2;
+        win_starty = 0;
+        win_startx = max_x / 2;
+    }
     let mut dirview = DirView::new(win_height, win_width, win_starty, win_startx, &cwd)
         .expect("Failed to initialize DirView");
 
     loop {
-        werase(dirview.window);
-        box_(dirview.window, 0, 0);
-        mvwaddstr(dirview.window, 0, 2, "PATH");
-        for (i, entry) in dirview.dirents.iter().enumerate() {
-            if i >= (win_height - 2) as usize {
-                break;
-            }
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy();
-            mvwaddstr(dirview.window, (i + 1) as i32, 1, &file_name_str);
-        }
-        mvwaddstr(dirview.window, win_height - 1, 0, "Use arrow keys to move, 'q' to quit.");
-        wrefresh(dirview.window);
+        DirView::draw(&dirview);
 
-        let ch = getch();
+        let ch = wgetch(dirview.window);
         match ch {
             KEY_UP => {
-                if dirview.row > 0 {
-                    dirview.row -= 1;
+                if dirview.selected > 0 {
+                    // Move cursor up to previous entry
+                    dirview.selected -= 1;
+                    if dirview.selected < dirview.scroll_offset {
+                        // Scroll up
+                        dirview.scroll_offset -= 1;
+                    }
+                } else {
+                    // Bell on attempt to move above first entry
+                    beep();
                 }
             }
             KEY_DOWN => {
-                if dirview.row < (dirview.dirents.len() as i32 - 1) && dirview.row < (win_height - 3) {
-                    dirview.row += 1;
+                let list_height = win_height - 2; // Adjust for borders
+                if dirview.selected + 1  < dirview.dirents.len() as i32 {
+                    // Move cursor down to next entry
+                    dirview.selected += 1;
+                    if dirview.selected >= dirview.scroll_offset + list_height {
+                        // Scroll down
+                        dirview.scroll_offset += 1;
+                    }
+                }
+                else {
+                    // Bell on attempt to move below last entry
+                    beep();
                 }
             }
             113 | 27 => {
                 break;
             }
+            //KEY_RESIZE => {
+            //    // Handle resize: recalculate sizes, recreate windows, etc.
             _ => {}
         }
     }
@@ -84,94 +130,6 @@ fn main() {
     delwin(dirview.window);
     endwin();
 }
-
-// ...existing code...
-
-fn main() {
-    initscr();              // Start ncurses mode
-    //keypad(stdscr(), true); // Enable arrow keys
-    noecho();               // Don't echo input
-    curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
-    start_color();         // Enable color if terminal supports it
-    init_pair(1, COLOR_CYAN, COLOR_BLACK); // Define color pair 1
-    init_pair(2, COLOR_YELLOW, COLOR_BLACK); // Define color pair 2
-
-    // Get screen size
-    let mut max_y = 0;
-    let mut max_x = 0;
-    getmaxyx(stdscr(), &mut max_y, &mut max_x);
-    // // Cast to i16, truncating if too large
-    // let max_y = if max_y > i16::MAX as i32 { i16::MAX } else { max_y as i16 };
-    // let max_x = if max_x > i16::MAX as i32 { i16::MAX } else { max_x as i16 };
-
-    // Calculate right half window position and size
-    let win_height = max_y;
-    let win_width = max_x / 2;
-    let win_starty = 0;
-    let win_startx = max_x / 2;
-
-    // Open the current working directory
-    let mut cwd = std::env::current_dir().expect("Failed to get current directory");
-
-    let dirView = DirView {
-        window: stdscr(),
-        row: 0,
-        dirents: Vec::new(),
-        cwd: cwd.clone(),
-    };
-
-    // Create a new window for the right half
-    let win = newwin(win_height, win_width, win_starty, win_startx);
-    keypad(win, true);
-    scrollok(win, true);
-
-    dirview.dirents = read_directory_contents(cwd.to_str().unwrap()).expect("Failed to read directory");
-    let mut row = 0;
-
-    loop {
-        werase(win); // Clear the window
-        box_(win, 0, 0); // Redraw the box
-        mvwaddstr(win, 0, 2, "PATH");
-        for (i, entry) in dirents.iter().enumerate() {
-            if i >= (max_y - 2).try_into().unwrap() {
-                break; // Bottom of window
-            }
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy();
-            mvwaddstr(win, (i + 1) as i32, 1, &file_name_str);
-        }
-        mvwaddstr(win, max_y - 1, 0, "Use arrow keys to move, 'q' to quit."); // Instructions at bottom
-        wrefresh(win); // Refresh the window to show changes
-        
-        // Player input
-        let ch = getch();
-        match ch {
-            KEY_UP => {
-                if row > 0 {
-                    row -= 1;
-                }
-            }
-            KEY_DOWN => {
-                if row < (dirents.len() as i32 - 1) && row < (max_y - 3) {
-                    row += 1;
-                }
-            }
-            113 | 27 => { // 'q' or ESC to quit
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    delwin(win);
-    endwin();               // End ncurses mode
-}
-
-
-
-
-
-
 
 /// Returns a Vec of DirEntry for the given directory path.
 /// Returns an io::Error if the directory can't be read.
