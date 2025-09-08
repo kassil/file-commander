@@ -14,7 +14,7 @@ struct DirView {
     selected: usize, // Selected row (absolute index)
     scroll_offset: usize, // First visible entry index
     dirents: io::Result<Vec<fs::DirEntry>>, // Directory entries
-    path: std::path::PathBuf, // Path
+    path: std::path::PathBuf, // Path of the directory being viewed
     dirty: bool, // Needs redraw
 }
 
@@ -29,6 +29,7 @@ impl DirView {
         self.scroll_offset = 0;
         self.dirty = true;
     }
+
     // Create a new DirView instance
     fn new(win_height: i32, win_width: i32, win_starty: i32, win_startx: i32, path: &std::path::Path) -> io::Result<Self> {
         // Throw if win_height or win_width is less than 3
@@ -193,6 +194,34 @@ fn main() {
                     else {
                         // Bell on attempt to move below last entry
                         beep();
+                    }
+                }
+            }
+            KEY_ENTER | 10 | 13 => {  // Handle different ENTER representations
+                if let Ok(ref dirents) = dirview.dirents {
+                    if dirview.selected == 0 {
+                        // Navigate to parent directory
+                        if let Some(parent) = dirview.path.parent().map(|p| p.to_path_buf()) {
+                            //dirview.load_directory(parent);
+                            dirview.path = parent;
+                            dirview.load();
+                            waddstr(w_debug, &format!("ENTER: Load parent {}\n", dirview.path.display()));
+                        }
+                    }
+                    else if let Some(entry) = dirents.get(dirview.selected - 1) {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            //dirview.load_directory(&path);
+                            dirview.path = entry.path();
+                            dirview.load();
+                            waddstr(w_debug, &format!("ENTER: Load subdirectory {}\n", path.to_path_buf().display()));
+                        } else {
+                            // Optional: handle files (open/view/etc)
+                            waddstr(w_debug, &format!("ENTER: Not a directory {}\n", path.to_path_buf().display()));
+                        }
+                    }
+                    else {
+                        waddstr(w_debug, &format!("ENTER: No entry at selected index {}\n", dirview.selected));
                     }
                 }
             }
