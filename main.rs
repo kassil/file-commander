@@ -109,17 +109,15 @@ impl DirView {
         }
 
         let win_height = getmaxy(self.window);
-
         match &self.dirents {
             Ok(elements) => {
-                let list_height = win_height - 2; // Adjust for borders
+                let view_height = (win_height - 2) as usize; // Adjust for borders
                 // Display directory entries with scrolling
-                waddstr(w_debug, &format!("Sc{} Sel{} ", self.scroll_offset, self.selected));
                 for (i, entry) in elements
                     .iter()
                     .enumerate()
                     .skip(self.scroll_offset)       // Top of page
-                    .take(list_height as usize)     // As many as fit in the window
+                    .take(view_height)     // As many as fit in the window
                 {
                     match entry {
                         DirListItem::ParentDir(_) => {
@@ -144,9 +142,8 @@ impl DirView {
                             }
                         }
                     }
-                    waddstr(w_debug, &format!(" {}", i));
                 }
-                waddstr(w_debug, "\n"); // Newline in debug window
+                waddstr(w_debug, &format!("Draw {}:{}\n", self.scroll_offset, self.scroll_offset + view_height));
             }
             Err(e) => {
                 mvwaddstr(self.window, 1, 1, &format!("Read error: {}", e));
@@ -200,7 +197,7 @@ fn main() {
         let ch = wgetch(dirview.window);
         match ch {
             KEY_UP => {
-                if let Ok(ref _dirents) = dirview.dirents {
+                if let Ok(ref _list) = dirview.dirents {
                     if dirview.selected > 0 {
                         // Move cursor up to previous entry
                         dirview.selected -= 1;
@@ -208,7 +205,8 @@ fn main() {
                             // Scroll up
                             dirview.scroll_offset -= 1;
                         }
-                        waddstr(w_debug, &format!("KUP Sel{} Scr{}\n", dirview.selected, dirview.scroll_offset));
+                        let view_height = (getmaxy(dirview.window) - 2) as usize; // Adjust for borders
+                        waddstr(w_debug, &format!("KUP Beg:{} Sel:{} End:{}\n", dirview.scroll_offset, dirview.selected, dirview.scroll_offset + view_height));
                         dirview.dirty = true;
                     } else {
                         beep();  // Cannot move above first entry
@@ -221,14 +219,14 @@ fn main() {
             KEY_DOWN => {
                 if let Ok(ref list) = dirview.dirents {
                     if dirview.selected + 1 < list.len() {
-                        let list_height = getmaxy(dirview.window) - 2; // Adjust for borders
+                        let view_height = (getmaxy(dirview.window) - 2) as usize; // Adjust for borders
                         // Move cursor down to next entry
                         dirview.selected += 1;
-                        if dirview.selected >= dirview.scroll_offset + list_height as usize {
+                        if dirview.selected >= dirview.scroll_offset + view_height {
                             // Scroll down
                             dirview.scroll_offset += 1;
                         }
-                        waddstr(w_debug, &format!("KDOWN Sel{} Scr{} LD{} N{}\n", dirview.selected, dirview.scroll_offset, list_height, list.len()));
+                        waddstr(w_debug, &format!("KDOWN Beg:{} Sel:{} End:{}\n", dirview.scroll_offset, dirview.selected, dirview.scroll_offset + view_height));
                         dirview.dirty = true;
                     }
                     else {
@@ -245,7 +243,7 @@ fn main() {
                                 let parent_clone = parent.clone();  // Clone the parent path
                                 // Navigate to parent directory
                                 dirview.load(&parent_clone);
-                                waddstr(w_debug, &format!("ENTER: Chdir {}\n", parent_clone.display()));
+                                waddstr(w_debug, &format!("KENTER: Chdir {}\n", parent_clone.display()));
                                 continue;
                             }
                             DirListItem::Entry(entry) => {
@@ -253,26 +251,27 @@ fn main() {
                                 if path.is_dir() {
                                     // Navigate to sub-directory
                                     dirview.load(&path);
-                                    waddstr(w_debug, &format!("ENTER: Chdir {}\n", path.to_path_buf().display()));
+                                    waddstr(w_debug, &format!("KENTER: Chdir {}\n", path.to_path_buf().display()));
                                 } else {
                                     // TODO: handle file (open, view, edit, ...)
-                                    waddstr(w_debug, &format!("ENTER: Not a directory {}\n", path.to_path_buf().display()));
+                                    waddstr(w_debug, &format!("KENTER: TODO Open {}\n", path.to_path_buf().display()));
                                 }
                             }
                         }
                     }
                     else {
-                        waddstr(w_debug, &format!("ENTER: No entry at selected index {}\n", dirview.selected));
+                        waddstr(w_debug, &format!("KENTER: No entry at selected index {}!\n", dirview.selected));
                     }
                 }
                 else {
                     // Try to reload directory
                     dirview.reload();
-                    waddstr(w_debug, &format!("ENTER: Reload dir {}\n", dirview.path.display()));
+                    waddstr(w_debug, &format!("KENTER: Reload dir {}\n", dirview.path.display()));
                     dirview.dirty = true;
                 }
             }
             113 | 27 => {
+                // Escape or 'q' to quit
                 break;
             }
             KEY_RESIZE => {
