@@ -180,7 +180,8 @@ fn main() {
             }
             KEY_DOWN => {
                 if let Ok(ref dirents) = dirview.dirents {
-                    if dirview.selected + 1 < dirents.len() {
+                    let list_len = 1 + dirents.len();      // One more for parent entry
+                    if dirview.selected + 1 < list_len {
                         let list_height = getmaxy(dirview.window) - 2; // Adjust for borders
                         // Move cursor down to next entry
                         dirview.selected += 1;
@@ -202,21 +203,20 @@ fn main() {
                     if dirview.selected == 0 {
                         // Navigate to parent directory
                         if let Some(parent) = dirview.path.parent().map(|p| p.to_path_buf()) {
-                            //dirview.load_directory(parent);
                             dirview.path = parent;
                             dirview.load();
-                            waddstr(w_debug, &format!("ENTER: Load parent {}\n", dirview.path.display()));
+                            waddstr(w_debug, &format!("ENTER: Chdir {}\n", dirview.path.display()));
                         }
                     }
                     else if let Some(entry) = dirents.get(dirview.selected - 1) {
                         let path = entry.path();
                         if path.is_dir() {
-                            //dirview.load_directory(&path);
+                            // Navigate to sub-directory
                             dirview.path = entry.path();
                             dirview.load();
-                            waddstr(w_debug, &format!("ENTER: Load subdirectory {}\n", path.to_path_buf().display()));
+                            waddstr(w_debug, &format!("ENTER: Chdir {}\n", path.to_path_buf().display()));
                         } else {
-                            // Optional: handle files (open/view/etc)
+                            // TODO: handle file (open, view, edit, ...)
                             waddstr(w_debug, &format!("ENTER: Not a directory {}\n", path.to_path_buf().display()));
                         }
                     }
