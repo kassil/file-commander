@@ -4,10 +4,8 @@
 extern crate ncurses;
 
 use ncurses::*;
-use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::iter;
 
 struct DirView {
     window: WINDOW, // ncurses window
@@ -40,7 +38,7 @@ impl DirView {
 
         let foo = read_directory_contents(&self.path);
         match foo {
-            Ok(mut entries) => {
+            Ok(entries) => {
                 // Add real directory entries
                 // for entry in entries.drain(..) {
                 //     elts.push(DirListItem::Entry(entry));
