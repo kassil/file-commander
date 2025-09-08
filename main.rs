@@ -13,18 +13,47 @@ struct DirView {
     window: WINDOW, // ncurses window
     selected: usize, // Selected row (absolute index)
     scroll_offset: usize, // First visible entry index
-    dirents: io::Result<Vec<fs::DirEntry>>, // Directory entries
+    dirents: io::Result<Vec<DirListItem>>, // Directory entries
     path: std::path::PathBuf, // Path of the directory being viewed
     dirty: bool, // Needs redraw
 }
 
+enum DirListItem {
+    ParentDir(std::path::PathBuf),      // Represents ".."
+    Entry(fs::DirEntry),                // Actual filesystem entry
+}
+
 impl DirView {
+    // Change to a new directory and load its contents
+    fn load(&mut self, current_path: &std::path::Path) {
+        self.path = current_path.to_path_buf();
+        self.reload();
+    }
+
     // Update the directory listing from the filesystem
-    fn load(&mut self) {
-        self.dirents = read_directory_contents(self.path.to_str().unwrap());
-        if let Ok(ref mut entries) = self.dirents {
-            entries.sort_by_key(|e| e.file_name());
+    fn reload(&mut self) {
+        let mut elts = Vec::new();
+        // Add the parent entry first (unless we're at the root)
+        if let Some(parent) = self.path.parent() {
+            elts.push(DirListItem::ParentDir(parent.to_path_buf()));
         }
+
+        let foo = read_directory_contents(&self.path);
+        match foo {
+            Ok(mut entries) => {
+                // Add real directory entries
+                // for entry in entries.drain(..) {
+                //     elts.push(DirListItem::Entry(entry));
+                // }
+                elts.extend(entries.into_iter().map(DirListItem::Entry));
+                self.dirents = Ok(elts);
+            }
+            Err(e) => {
+                // Store the error
+                self.dirents = Err(e);
+            }
+        }
+
         self.selected = 0;
         self.scroll_offset = 0;
         self.dirty = true;
@@ -47,7 +76,7 @@ impl DirView {
             path: path.to_path_buf(),
             dirty: true,
         };
-        dirview.load(); // Load directory contents before returning
+        dirview.load(path); // Load directory contents before returning
         Ok(dirview)
     }
 
@@ -80,35 +109,47 @@ impl DirView {
         }
 
         let win_height = getmaxy(self.window);
+
         match &self.dirents {
-            Ok(dirents) => {
+            Ok(elements) => {
                 let list_height = win_height - 2; // Adjust for borders
                 // Display directory entries with scrolling
-                // Add parent entry at the top
                 waddstr(w_debug, &format!("Sc{} Sel{} ", self.scroll_offset, self.selected));
-                let combined_entries = iter::once(OsString::from(".."))
-                    .chain(dirents.iter().map(|e| e.file_name()));
-                for (i, file_name) in combined_entries
+                for (i, entry) in elements
+                    .iter()
                     .enumerate()
                     .skip(self.scroll_offset)       // Top of page
                     .take(list_height as usize)     // As many as fit in the window
                 {
+                    match entry {
+                        DirListItem::ParentDir(_) => {
+                            let file_name_str = "..".to_string();
+                            if i == self.selected {
+                                wattron(self.window, A_REVERSE);
+                            }
+                            mvwaddstr(self.window, (i + 1 - self.scroll_offset) as i32, 1, &file_name_str);
+                            if i == self.selected {
+                                wattroff(self.window, A_REVERSE);
+                            }
+                        }
+                        DirListItem::Entry(entry) => {
+                            let file_name = entry.file_name();
+                            let file_name_str = file_name.to_string_lossy();
+                            if i == self.selected {
+                                wattron(self.window, A_REVERSE);
+                            }
+                            mvwaddstr(self.window, (i + 1 - self.scroll_offset) as i32, 1, &file_name_str);
+                            if i == self.selected {
+                                wattroff(self.window, A_REVERSE);
+                            }
+                        }
+                    }
                     waddstr(w_debug, &format!(" {}", i));
-                    let file_name_str = file_name.to_string_lossy();
-                    if i == self.selected {
-                        wattron(self.window, A_REVERSE);
-                    }
-                    mvwaddstr(self.window, (i + 1 - self.scroll_offset) as i32, 1, &file_name_str);
-                    if i == self.selected {
-                        wattroff(self.window, A_REVERSE);
-                    }
                 }
                 waddstr(w_debug, "\n"); // Newline in debug window
             }
             Err(e) => {
                 mvwaddstr(self.window, 1, 1, &format!("Read error: {}", e));
-                wrefresh(self.window);
-                return;
             }
         }
         mvwaddstr(self.window, win_height - 1, 2, "Use arrow keys to move, 'q' to quit.");
@@ -170,8 +211,7 @@ fn main() {
                         waddstr(w_debug, &format!("KUP Sel{} Scr{}\n", dirview.selected, dirview.scroll_offset));
                         dirview.dirty = true;
                     } else {
-                        // Bell on attempt to move above first entry
-                        beep();
+                        beep();  // Cannot move above first entry
                     }
                 }
                 else {
@@ -179,9 +219,8 @@ fn main() {
                 }
             }
             KEY_DOWN => {
-                if let Ok(ref dirents) = dirview.dirents {
-                    let list_len = 1 + dirents.len();      // One more for parent entry
-                    if dirview.selected + 1 < list_len {
+                if let Ok(ref list) = dirview.dirents {
+                    if dirview.selected + 1 < list.len() {
                         let list_height = getmaxy(dirview.window) - 2; // Adjust for borders
                         // Move cursor down to next entry
                         dirview.selected += 1;
@@ -189,40 +228,48 @@ fn main() {
                             // Scroll down
                             dirview.scroll_offset += 1;
                         }
-                        waddstr(w_debug, &format!("KDOWN Sel{} Scr{} LD{} N{}\n", dirview.selected, dirview.scroll_offset, list_height, dirents.len()));
+                        waddstr(w_debug, &format!("KDOWN Sel{} Scr{} LD{} N{}\n", dirview.selected, dirview.scroll_offset, list_height, list.len()));
                         dirview.dirty = true;
                     }
                     else {
-                        // Bell on attempt to move below last entry
-                        beep();
+                        beep();  // Cannot move below last entry
                     }
                 }
             }
             KEY_ENTER | 10 | 13 => {  // Handle different ENTER representations
-                if let Ok(ref dirents) = dirview.dirents {
-                    if dirview.selected == 0 {
-                        // Navigate to parent directory
-                        if let Some(parent) = dirview.path.parent().map(|p| p.to_path_buf()) {
-                            dirview.path = parent;
-                            dirview.load();
-                            waddstr(w_debug, &format!("ENTER: Chdir {}\n", dirview.path.display()));
-                        }
-                    }
-                    else if let Some(entry) = dirents.get(dirview.selected - 1) {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            // Navigate to sub-directory
-                            dirview.path = entry.path();
-                            dirview.load();
-                            waddstr(w_debug, &format!("ENTER: Chdir {}\n", path.to_path_buf().display()));
-                        } else {
-                            // TODO: handle file (open, view, edit, ...)
-                            waddstr(w_debug, &format!("ENTER: Not a directory {}\n", path.to_path_buf().display()));
+                if let Ok(ref elements) = dirview.dirents {
+                    // Get the selected entry
+                    if let Some(selected_item) = elements.get(dirview.selected) {
+                        match selected_item {
+                            DirListItem::ParentDir(parent) => {
+                                let parent_clone = parent.clone();  // Clone the parent path
+                                // Navigate to parent directory
+                                dirview.load(&parent_clone);
+                                waddstr(w_debug, &format!("ENTER: Chdir {}\n", parent_clone.display()));
+                                continue;
+                            }
+                            DirListItem::Entry(entry) => {
+                                let path = entry.path();  // Owns the path
+                                if path.is_dir() {
+                                    // Navigate to sub-directory
+                                    dirview.load(&path);
+                                    waddstr(w_debug, &format!("ENTER: Chdir {}\n", path.to_path_buf().display()));
+                                } else {
+                                    // TODO: handle file (open, view, edit, ...)
+                                    waddstr(w_debug, &format!("ENTER: Not a directory {}\n", path.to_path_buf().display()));
+                                }
+                            }
                         }
                     }
                     else {
                         waddstr(w_debug, &format!("ENTER: No entry at selected index {}\n", dirview.selected));
                     }
+                }
+                else {
+                    // Try to reload directory
+                    dirview.reload();
+                    waddstr(w_debug, &format!("ENTER: Reload dir {}\n", dirview.path.display()));
+                    dirview.dirty = true;
                 }
             }
             113 | 27 => {
@@ -254,11 +301,35 @@ fn main() {
 /// Read the contents of a directory and return the entries.
 /// Returns a Vec of DirEntry for the given directory path.
 /// Returns an io::Error if the directory can't be read.
-fn read_directory_contents(path: &str) -> io::Result<Vec<fs::DirEntry>> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        entries.push(entry);
-    }
+fn read_directory_contents(path: &std::path::Path) -> io::Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(path)?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|e| e.file_name());
     Ok(entries)
+}
+
+// Check if the target is a directory and can be opened.
+// Follows symlinks.
+fn is_openable_dir(entry: &fs::DirEntry) -> bool {
+    let path = entry.path();
+
+    // Follow symlinks, check if target is a directory
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => {
+            // Try to actually open the directory to confirm it's accessible
+            fs::read_dir(&path).is_ok()
+        }
+        _ => false,
+    }
+}
+
+fn display_name(entry: &fs::DirEntry) -> String {
+    let file_name_os = entry.file_name();                     // Own the OsString
+    let name = file_name_os.to_string_lossy();                // Borrow from that
+    if is_openable_dir(entry) {
+        format!("[{}]", name)
+    } else {
+        name.into()
+    }
 }
