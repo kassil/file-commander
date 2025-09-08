@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Kevin Kassil
+// Terminal file manager inspired by Norton Commander
+
 extern crate ncurses;
 
 use ncurses::*;
