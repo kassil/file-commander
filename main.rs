@@ -125,7 +125,10 @@ impl DirView {
                             if i == self.selected {
                                 wattron(self.window, A_REVERSE);
                             }
+                            // Highlight directories in a different color
+                            wattron(self.window, COLOR_PAIR(2));
                             mvwaddstr(self.window, (i + 1 - self.scroll_offset) as i32, 1, &file_name_str);
+                            wattron(self.window, COLOR_PAIR(1)); // Reset to default color
                             if i == self.selected {
                                 wattroff(self.window, A_REVERSE);
                             }
@@ -135,10 +138,15 @@ impl DirView {
                             if i == self.selected {
                                 wattron(self.window, A_REVERSE);
                             }
+                            // Highlight directories in a different color
+                            if is_openable_dir(entry) {
+                                wattron(self.window, COLOR_PAIR(2));
+                            }
                             mvwaddstr(self.window, (i + 1 - self.scroll_offset) as i32, 1, &file_name_str);
                             if i == self.selected {
                                 wattroff(self.window, A_REVERSE);
                             }
+                            wattron(self.window, COLOR_PAIR(1)); // Reset to default color
                         }
                     }
                 }
@@ -158,8 +166,9 @@ fn main() {
     initscr();
     noecho();
     curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
-    //start_color();
-    //init_pair(1, COLOR_CYAN, COLOR_BLACK);
+    start_color();
+    init_pair(1, COLOR_WHITE, COLOR_BLACK);
+    init_pair(2, COLOR_BLUE, COLOR_BLACK);
     //init_pair(2, COLOR_YELLOW, COLOR_BLACK);
 
     let w_debug = newwin(getmaxy(stdscr()), getmaxx(stdscr())/2, 0, 0);
