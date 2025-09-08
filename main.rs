@@ -121,7 +121,7 @@ impl DirView {
                 {
                     match entry {
                         DirListItem::ParentDir(_) => {
-                            let file_name_str = "..".to_string();
+                            let file_name_str = "[..]".to_string();
                             if i == self.selected {
                                 wattron(self.window, A_REVERSE);
                             }
@@ -131,8 +131,7 @@ impl DirView {
                             }
                         }
                         DirListItem::Entry(entry) => {
-                            let file_name = entry.file_name();
-                            let file_name_str = file_name.to_string_lossy();
+                            let file_name_str = display_name(entry);
                             if i == self.selected {
                                 wattron(self.window, A_REVERSE);
                             }
