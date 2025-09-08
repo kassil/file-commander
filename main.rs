@@ -151,7 +151,14 @@ impl DirView {
                 waddstr(w_debug, &format!("Draw {}:{}\n", self.scroll_offset, self.scroll_offset + view_height));
             }
             Err(e) => {
-                mvwaddstr(self.window, 1, 1, &format!("Read error: {}", e));
+                // Highlight directories in a different color
+                let file_name_str = "[..]".to_string();
+                wattron(self.window, A_REVERSE);
+                wattron(self.window, COLOR_PAIR(2));
+                mvwaddstr(self.window, 1, 1, &file_name_str);
+                wattron(self.window, COLOR_PAIR(1)); // Reset to default color
+                wattroff(self.window, A_REVERSE);
+                mvwaddstr(self.window, 2, 1, &format!("Read error: {}", e));
             }
         }
         mvwaddstr(self.window, win_height - 1, 2, "Use arrow keys to move, 'q' to quit.");
@@ -219,7 +226,7 @@ fn main() {
                     }
                 }
                 else {
-                    beep();
+                    beep();  // No entries, cannot move
                 }
             }
             KEY_DOWN => {
@@ -238,6 +245,9 @@ fn main() {
                     else {
                         beep();  // Cannot move below last entry
                     }
+                }
+                else {
+                    beep();  // No entries, cannot move
                 }
             }
             KEY_ENTER | 10 | 13 => {  // Handle different ENTER representations
@@ -270,10 +280,12 @@ fn main() {
                     }
                 }
                 else {
-                    // Try to reload directory
-                    dirview.reload();
-                    waddstr(w_debug, &format!("KENTER: Reload dir {}\n", dirview.path.display()));
-                    dirview.dirty = true;
+                    if let Some(parent) = dirview.path.parent() {
+                        //.unwrap_or(std::path::Path::new("/")) {
+                        let parent_clone = parent.to_path_buf();  // Clone the parent path
+                        // Navigate to parent directory
+                        dirview.load(&parent_clone);
+                    }
                 }
             }
             113 | 27 => {
@@ -322,8 +334,9 @@ fn is_openable_dir(entry: &fs::DirEntry) -> bool {
     // Follow symlinks, check if target is a directory
     match fs::metadata(&path) {
         Ok(metadata) if metadata.is_dir() => {
+            true
             // Try to actually open the directory to confirm it's accessible
-            fs::read_dir(&path).is_ok()
+            //fs::read_dir(&path).is_ok()
         }
         _ => false,
     }
