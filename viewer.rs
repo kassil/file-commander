@@ -2,178 +2,166 @@
 // Navigate with arrow keys and Page Up/Down.
 // Press Esc to close the window.
 
-use std::io::BufReader;
-use std::ptr;
-//use std::fs::File;
-use std::io::BufRead;
-//use std::path::Path;
 use ncurses::*;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
+use std::path::Path;
 
-struct FileViewer {
-    window: WINDOW,
-    path: std::path::PathBuf,
-    //file: std::fs::File,
-    //reader: std::io::BufReader<std::fs::File>,
-    // Load entire file contents
-    lines: Vec<String>,
-    // File line number at the top of window
-    line_idx: usize,
-    // File offset at the top of window
-    //offset: usize,
-    dirty: bool,
-}
-
-impl FileViewer {
-    fn new(path: &std::path::Path, reader: std::io::BufReader<std::fs::File> /* file: &std::fs::File*/) -> Self {
-
-        let mut viewer = Self {
-            window: ptr::null_mut(), // Placeholder, will be set below
-            path: path.to_path_buf(),
-            //reader: reader, //BufReader::new(file),
-            lines: reader.lines().filter_map(Result::ok).collect(),
-            line_idx: 0,
-            //offset: 0,
-            dirty: true,
-        };
-
-        let (width, height, startx, starty) = viewer.calc_extents();
-        viewer.window = newwin(height, width, starty, startx);
-        keypad(viewer.window, true);
-
-        viewer
-    }
-
-    fn draw(&mut self, /*w_debug: WINDOW*/) {
-
-        if self.dirty {
-
-            let n_cols = getmaxx(self.window) - 4;
-            let n_rows = getmaxy(self.window) - 2;
-            // Erase previous content
-            werase(self.window);
-            // Draw border and title
-            box_(self.window, 0, 0);
-            mvwaddnstr(self.window, 0, 2, &self.path.to_string_lossy(), n_cols);
-            // Render lines
-            // for (i, option) in self.prompt.iter().enumerate() {
-            //     // Truncate long lines to fit window width
-            //     mvwaddnstr(self.window, (i + 1) as i32, 2, option, n_cols);
-            // }
-
-            // Draw current "window" of lines
-            for (i, line) in self.lines.iter().skip(self.line_idx).take(n_rows as usize).enumerate() {
-                // truncate line if it's longer than window width
-                // let display_line = if line.len() > width as usize {
-                //     &line[..(width as usize)]
-                // } else {
-                //     line
-                // };
-                mvwaddnstr(self.window, 1+i as i32, 1, line, n_cols);
-            }
-            wrefresh(self.window);
-            self.dirty = false;
+/// Skip exactly one line from the current position.
+/// Returns how many bytes were skipped.
+fn skip_line(file: &mut File) -> io::Result<u64> {
+    let mut buf = [0u8; 1];
+    let mut skipped = 0;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break; // EOF
+        }
+        skipped += 1;
+        if buf[0] == b'\n' {
+            break; // end of line
         }
     }
+    Ok(skipped)
+}
 
-    fn calc_extents(&self) -> (i32, i32, i32, i32) { 
-
-        // TODO If screen is less than 6 cols or 3 rows, panic
-        let screen_cols = getmaxx(stdscr());
-        let width = screen_cols;
-        let height = getmaxy(stdscr());
-        let starty = 0;
-        let startx = 0;
-        (width, height, startx, starty)
-    }
-
-    fn resize(&mut self) {
-
-        let (width, height, startx, starty) = self.calc_extents();
-        wresize(self.window, height, width);
-        mvwin(self.window, starty, startx);
-        self.dirty = true;
-    }
-
-    fn handle_input(&mut self, ch: i32) -> Option<usize> {
-
-        match ch {
-            KEY_UP => {
-                if self.line_idx > 0 {
-                    self.line_idx -= 1;
-                    self.dirty = true;
-                }
-            }
-            KEY_DOWN => {
-                let n_rows = (getmaxy(self.window) - 2) as usize;
-                if self.line_idx + n_rows < self.lines.len() {
-                    // Seek to next line
-                    self.line_idx += 1;
-                    self.dirty = true;
-                }
-            }
-            // KEY_PAGE_UP => {
-            //     self.
-            // }
-
-            27 => return Some(0), // ESC key to close
-
-            KEY_RESIZE => self.resize(),
-
-            _ => {}
+/// Read up to `max_lines` starting from current position.
+fn read_lines_from(file: &mut File, max_lines: usize, width: usize) -> io::Result<Vec<String>> {
+    let mut reader = BufReader::new(file.try_clone()?);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    while lines.len() < max_lines {
+        line.clear();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break; // EOF
         }
-        None
+        // truncate if longer than screen width
+        if line.len() > width {
+            line.truncate(width);
+        }
+        lines.push(line.trim_end_matches('\n').to_string());
+    }
+    Ok(lines)
+}
+
+fn find_prev_line_start(w_debug: WINDOW, file: &mut File, file_pos: u64) -> std::io::Result<u64> {
+    if file_pos == 0 {
+        // Already at start of file
+        waddstr(w_debug, &format!("find_prev_line_start already at beginning\n"));
+        return Ok(0);
+    }
+
+    // Choose how far back to step (at most 4096 or to start of file)
+    // -1 to avoid re-reading current line's newline
+    let backstep = 4096.min((file_pos - 1) as usize) as u64;
+    let seek_pos = file_pos - backstep - 1; 
+    file.seek(SeekFrom::Start(seek_pos))?;
+
+    let mut buf = vec![0u8; backstep as usize];
+    let n = file.read(&mut buf)?;
+    let slice = &buf[..n];
+
+    // search backward through slice
+    if let Some(rel_idx) = slice.iter().rposition(|&b| b == b'\n') {
+        // newline found — line starts right after it
+        waddstr(w_debug, &format!("find_prev_line_start found {} + {} = {}\n", seek_pos, rel_idx, seek_pos + rel_idx as u64 + 1));
+        Ok(seek_pos + rel_idx as u64 + 1 as u64)
+    } else {
+        // no newline — in middle of first line, or we didn't go back far enough
+        waddstr(w_debug, &format!("find_prev_line_start no newline found before {}!\n", file_pos));
+        Ok(0)
     }
 }
 
-impl Drop for FileViewer {
-
-    fn drop(&mut self) {
-
-        // werase(self.window);
-        // wrefresh(self.window); // Redraw cleared window to erase from screen
-        delwin(self.window); // Clean up the window
-    }
-}
-
-pub fn view_file_modal(w_debug: WINDOW, file_path: &std::path::Path) {
-
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    use std::path::Path;
-
-    //let path = Path::new(file_path);
-    let file = match File::open(&file_path) {
-        
+pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
+    let mut file = match File::open(file_path) {
         Ok(f) => f,
         Err(e) => {
-            waddstr(w_debug, &format!("Error opening file {}: {}\n", file_path.display(), e));
+            waddstr(
+                w_debug,
+                &format!("Error opening file {}: {}\n", file_path.display(), e),
+            );
             return;
         }
     };
 
-    let reader = BufReader::new(file);
-    //let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    let mut height = 0;
+    let mut width = 0;
+    getmaxyx(w_debug, &mut height, &mut width);
 
-    let mut dialog = FileViewer::new(file_path, reader);
+    let superwindow = newwin(height, width, 0, width);
+    let window = newwin(height-2, width-2, 1, width+1);
+
+    // Box around window
+    box_(superwindow, 0, 0);
+    // Title with filename
+    mvwaddstr(superwindow, 0, 2, &format!(" {} ", file_path.display()));
+    // Instructions
+    mvwaddstr(superwindow, height-1, 2, "Up/Down to scroll, Esc or 'q' to close");
+    wrefresh(superwindow);
+
+    let mut file_pos: u64 = 0; // where the top of screen begins
+    keypad(window, true);
 
     loop {
-        //wrefresh(w_debug);  // Draw debug window below dialog
-        dialog.draw(); // Redraw after handling input
-        // Handle input
-        let ch = wgetch(dialog.window);
-        if ch == KEY_RESIZE {
-            // // Handle terminal resize
-            // clear();
-            // refresh();
+        wrefresh(w_debug); // Draw debug window below dialog
+        werase(window);
+
+        // Position file and read visible window
+        file.seek(SeekFrom::Start(file_pos)).unwrap();
+        let lines = read_lines_from(&mut file, height as usize, width as usize).unwrap();
+
+        for (i, line) in lines.iter().enumerate() {
+            mvwaddstr(window, i as i32, 0, line);
         }
-        if let Some(selected) = dialog.handle_input(ch) {
-            if selected == 0 {
-                // Close option selected
-                //waddstr(w_debug, "File viewer closed\n");
+        wrefresh(window);
+
+        match wgetch(window) {
+            KEY_DOWN => {
+                // TODO Stop before document scrolls off screen!
+                file.seek(SeekFrom::Start(file_pos)).unwrap();
+                if let Ok(n) = skip_line(&mut file) {
+                    if n > 0 {
+                        waddstr(w_debug, &format!("KDOWN {} + {} = {} \n", file_pos, n, file_pos + n));
+                        file_pos += n;
+                    }
+                }
+            }
+            KEY_UP => {
+                if let new_pos = find_prev_line_start(w_debug, &mut file, file_pos).unwrap() {
+                    waddstr(w_debug, &format!("KUP {} - {} = {}\n", file_pos, file_pos - new_pos, new_pos));
+                    file_pos = new_pos;
+                }
+            }
+
+            // Handle terminal resize
+            KEY_RESIZE => {
+                let scr_rows = getmaxy(stdscr());
+                let scr_cols = getmaxx(stdscr());
+                //werase(w_debug);
+                wresize(w_debug, scr_rows, scr_cols/2);
+
+                wresize(superwindow, scr_rows, scr_cols - scr_cols/2);
+                mvwin(superwindow, 0, scr_cols/2);
+
+                wresize(window, scr_rows-2, scr_cols - scr_cols/2 - 2);
+                mvwin(window, 1, scr_cols/2 + 1);
+
+                // Redraw border and title
+                box_(superwindow, 0, 0);
+                mvwaddstr(superwindow, 0, 2, &format!(" {} ", file_path.display()));
+                mvwaddstr(superwindow, scr_rows-1, 2, "Up/Down to scroll, Esc or 'q' to close");
+                wrefresh(superwindow);
+            }
+
+            // Escape or 'q' to quit
+            113 | 27 => {
                 break;
             }
+            _ => {}
         }
-        //waddstr(w_debug, "Viewing file...\n");
     }
+    delwin(window);
+    delwin(superwindow);
 }
-
