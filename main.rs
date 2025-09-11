@@ -6,6 +6,8 @@ extern crate ncurses;
 use ncurses::*;
 use std::fs;
 use std::io;
+//mod modal_dialog;
+mod viewer;
 
 struct DirView {
     window: WINDOW, // ncurses window
@@ -186,6 +188,8 @@ fn main() {
     scrollok(w_debug, true);
     waddstr(w_debug, "Debug Window\n");
 
+    // modal_dialog::hello_modal(w_debug);
+
     let cwd = std::env::current_dir().expect("Failed to get current directory");
 
     let (init_win_height, init_win_width, init_win_starty, init_win_startx);
@@ -270,7 +274,8 @@ fn main() {
                                     waddstr(w_debug, &format!("KENTER: Chdir {}\n", path.to_path_buf().display()));
                                 } else {
                                     // TODO: handle file (open, view, edit, ...)
-                                    waddstr(w_debug, &format!("KENTER: TODO Open {}\n", path.to_path_buf().display()));
+                                    viewer::view_file_modal(w_debug, &path);
+                                    //waddstr(w_debug, &format!("KENTER: TODO Open {}\n", path.to_path_buf().display()));
                                 }
                             }
                         }
