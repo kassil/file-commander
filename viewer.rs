@@ -29,9 +29,8 @@ fn skip_line(file: &mut File) -> io::Result<u64> {
 fn read_lines_from(file: &mut File, max_lines: usize, width: usize) -> io::Result<Vec<String>> {
     let mut reader = BufReader::new(file.try_clone()?);
     let mut lines = Vec::new();
-    let mut line = String::new();
     while lines.len() < max_lines {
-        line.clear();
+        let mut line = String::new();
         let bytes = reader.read_line(&mut line)?;
         if bytes == 0 {
             break; // EOF
@@ -92,6 +91,7 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
 
     let superwindow = newwin(height, width, 0, width);
     let window = newwin(height-2, width-2, 1, width+1);
+    scrollok(window, true);
 
     // Box around window
     box_(superwindow, 0, 0);
@@ -104,18 +104,17 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     let mut file_pos: u64 = 0; // where the top of screen begins
     keypad(window, true);
 
+    // Position file and read visible window
+    file.seek(SeekFrom::Start(file_pos)).unwrap();
+    let lines = read_lines_from(&mut file, (height-2) as usize, (width - 2) as usize).unwrap();
+    werase(window);
+    for (i, line) in lines.iter().enumerate() {
+        mvwaddstr(window, i as i32, 0, line);
+    }
+    wrefresh(window);
+
     loop {
         wrefresh(w_debug); // Draw debug window below dialog
-        werase(window);
-
-        // Position file and read visible window
-        file.seek(SeekFrom::Start(file_pos)).unwrap();
-        let lines = read_lines_from(&mut file, height as usize, width as usize).unwrap();
-
-        for (i, line) in lines.iter().enumerate() {
-            mvwaddstr(window, i as i32, 0, line);
-        }
-        wrefresh(window);
 
         match wgetch(window) {
             KEY_DOWN => {
@@ -125,13 +124,32 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                     if n > 0 {
                         waddstr(w_debug, &format!("KDOWN {} + {} = {} \n", file_pos, n, file_pos + n));
                         file_pos += n;
+
+                        // Read one new line at bottom
+                        if let Ok(lines) = read_lines_from(&mut file, 1, width as usize) {
+                            if let Some(line) = lines.get(0) {
+                                wscrl(window, 1);
+                                mvwaddstr(window, height - 3, 0, line);
+                                wrefresh(window);
+                            }
+                        };
                     }
                 }
             }
             KEY_UP => {
-                if let new_pos = find_prev_line_start(w_debug, &mut file, file_pos).unwrap() {
+                if file_pos > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut file, file_pos) {
                     waddstr(w_debug, &format!("KUP {} - {} = {}\n", file_pos, file_pos - new_pos, new_pos));
                     file_pos = new_pos;
+                    file.seek(SeekFrom::Start(file_pos)).unwrap();
+                    // Read one new line at top
+                    if let Ok(lines) = read_lines_from(&mut file, 1, width as
+                    usize) {
+                        if let Some(line) = lines.get(0) {
+                            wscrl(window, -1);
+                            mvwaddstr(window, 0, 0, line);
+                            wrefresh(window);
+                        }
+                    };
                 }
             }
 
