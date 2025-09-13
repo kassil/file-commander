@@ -78,7 +78,7 @@ fn rtrim(line: &mut String) {
 
 pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
 
-    let mut file = match File::open(file_path) {
+    let file = match File::open(file_path) {
 
         Ok(f) => f,
         Err(e) => {
@@ -93,9 +93,10 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     let mut reader = BufReader::new(file);
 
     let (height, width, startrow, startcol) = calc_extents();
-    let superwindow = newwin(height, width, 0, width);
-    let window = newwin(height-2, width-2, 1, width+1);
+    let superwindow = newwin(height, width, startrow, startcol);
+    let window = newwin(height-2, width-2, startrow+1, startcol+1);
     scrollok(window, true);
+    keypad(window, true);
 
     // Box around window
     box_(superwindow, 0, 0);
@@ -107,7 +108,6 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
 
     let mut top_file_pos: u64 = 0; // where the top of screen begins
     let mut bot_file_pos: u64 = 0; // after the bottom of screen
-    keypad(window, true);
 
     for i in 0 .. getmaxy(window) {
         let mut line = String::new();
