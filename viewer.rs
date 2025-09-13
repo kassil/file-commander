@@ -3,6 +3,7 @@
 // Press Esc to close the window.
 
 use ncurses::*;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -17,7 +18,7 @@ fn find_prev_line_start(w_debug: WINDOW, reader: &mut BufReader<File>, file_pos:
     // Choose how far back to step (at most 4096 or to start of file)
     // -1 to avoid re-reading current line's newline
     let backstep = 4096.min((file_pos - 1) as usize) as u64;
-    let seek_pos = file_pos - backstep - 1; 
+    let seek_pos = file_pos - backstep - 1;
     reader.seek(SeekFrom::Start(seek_pos))?;
 
     let mut buf = vec![0u8; backstep as usize];
@@ -106,67 +107,88 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     mvwaddstr(superwindow, height-1, 2, "Up/Down to scroll, Esc or 'q' to close");
     wrefresh(superwindow);
 
-    let mut top_file_pos: u64 = 0; // where the top of screen begins
-    let mut bot_file_pos: u64 = 0; // after the bottom of screen
+    // The file position of each visible line
+    let mut line_offsets: VecDeque<u64> = VecDeque::new();
 
+    // Load and display the visible portion
+    let mut temp_pos = 0;
     for i in 0 .. getmaxy(window) {
+        line_offsets.push_back(temp_pos);
         let mut line = String::new();
         if let Ok(n_bytes) = reader.read_line(&mut line) {
-
             if n_bytes == 0 {
                 break; // EOF
             }
-            bot_file_pos += n_bytes as u64;
+            temp_pos += n_bytes as u64;  // mark where the next line will begin
+            // Remove trailing newline
             rtrim(&mut line);
+            // Draw the line
             mvwaddnstr(window, i as i32, 0, &line, getmaxx(window));
+
+            // record starting position
         }
     }
+    line_offsets.push_back(temp_pos);
     wrefresh(window);
-    waddstr(w_debug, &format!("OPEN top:{} bot:{}\n", top_file_pos, bot_file_pos));
+    waddstr(w_debug, &format!("OPEN N:{} offsets:", line_offsets.len()));
+    for i in &line_offsets {
+        waddstr(w_debug, &format!(" {}", i));
+    }
+    waddstr(w_debug, "\n");
 
     loop {
         wrefresh(w_debug); // Draw debug window below dialog
 
         match wgetch(window) {
             KEY_DOWN => {
-                // Advance top row
-                // TODO Maybe keep the positions of the visible lines?
-                reader.seek(SeekFrom::Start(top_file_pos)).unwrap();
-                top_file_pos += reader.skip_until(b'\n').unwrap() as u64;
-
+                // Rust note: copy the element, otherwise we'd hold an immut reference to the list.
+                let bot_file_pos = *line_offsets.back().unwrap();
                 // Read a line
-                reader.seek(SeekFrom::Start(bot_file_pos)).unwrap();
+                reader.seek(SeekFrom::Start(bot_file_pos));
                 let mut line = String::new();
-                let result = reader.read_line(&mut line).unwrap();
-                //bot_file_pos = reader.stream_position().unwrap() as u64;
-                bot_file_pos += result as u64;
+                let line_n_bytes = reader.read_line(&mut line).unwrap();
+                if line_n_bytes == 0 {
+                    // EOF: cannot scroll down
+                    beep();
+                }
+                else {
+                    // Remove the old top row
+                    line_offsets.pop_front();
+                    // Add the new bottom row
+                    line_offsets.push_back(bot_file_pos + line_n_bytes as u64);
 
-                // Remove trailing newline if present
-                if line.ends_with('\n') {
-                    line.pop(); // remove '\n'
-                    if line.ends_with('\r') {
-                        line.pop(); // remove '\r' for Windows CRLF
+                    // Remove trailing newline if present
+                    if line.ends_with('\n') {
+                        line.pop(); // remove '\n'
+                        if line.ends_with('\r') {
+                            line.pop(); // remove '\r' for Windows CRLF
+                        }
                     }
-                }                
-                
-                // Draw the bottom row
-                wscrl(window, 1);
-                mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
-                wrefresh(window);
 
-                waddstr(w_debug, &format!("KDOWN top:{} bot:{}\n", top_file_pos, bot_file_pos));
+                    // Draw the bottom row
+                    wscrl(window, 1);
+                    mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
+                    wrefresh(window);
+
+                    waddstr(w_debug, &format!("KDOWN top:{} bot:{} n:{}\n", line_offsets.front().unwrap(), line_offsets.back().unwrap(), line_offsets.len()));
+                }
             }
 
             KEY_UP => {
                 // Find the line before the top one
-                if top_file_pos > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, top_file_pos) {
+                // if line_offsets.front() and ...
+                if *line_offsets.front().unwrap() > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, *line_offsets.front().unwrap()) {
 
-                    waddstr(w_debug, &format!("KUP line1_start:{} line1_len:{} line2_start:{} lineN_start:{}\n", new_pos, top_file_pos - new_pos, top_file_pos, bot_file_pos));
-                    top_file_pos = new_pos;
-                    reader.seek(SeekFrom::Start(top_file_pos));
+                    // Advance bottom row
+                    line_offsets.pop_back();
+                    line_offsets.push_front(new_pos);
+
+                    waddstr(w_debug, &format!("KUP top:{} bot:{} N:{}\n",
+                        *line_offsets.front().unwrap(), *line_offsets.back().unwrap(), line_offsets.len()));
+                    reader.seek(SeekFrom::Start(new_pos));
                     // Read one new line at top
                     let mut line = String::new();
-                    if let Ok(n) = reader.read_line(&mut line) {
+                    if let Ok(_line_n_bytes) = reader.read_line(&mut line) {
 
                         // Remove trailing newline if present
                         if line.ends_with('\n') {
@@ -174,16 +196,11 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                             if line.ends_with('\r') {
                                 line.pop(); // remove '\r' for Windows CRLF
                             }
-                        }                
+                        }
 
                         wscrl(window, -1);
                         mvwaddnstr(window, 0, 0, &line, getmaxx(window));
-                        wrefresh(window);                        
-                    }
-
-                    // Find the line before the bottom one
-                    if let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, bot_file_pos) {
-                        bot_file_pos = new_pos;
+                        wrefresh(window);
                     }
                 }
             }
