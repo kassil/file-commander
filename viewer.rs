@@ -67,6 +67,32 @@ fn resize(w_debug: WINDOW, superwindow: WINDOW, window: WINDOW, file_path: &Path
     wrefresh(superwindow);
 }
 
+fn expand(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) {
+
+    let n_lines = (1 + getmaxy(window) - line_offsets.len() as i32).max(0) as usize;
+    for _ in 0 .. n_lines { //line_offsets.len() .. line_offsets.len() + n_lines {
+        let pos = *line_offsets.back().unwrap();
+        let mut line = String::new();
+        if let Ok(n_bytes) = reader.read_line(&mut line) {
+            if n_bytes == 0 {
+                break; // EOF
+            }
+            // Remove trailing newline
+            rtrim(&mut line);
+            // Draw the line
+            mvwaddnstr(window, line_offsets.len() as i32 - 1, 0, &line, getmaxx(window));
+
+            // mark where the next line will begin
+            line_offsets.push_back(pos + n_bytes as u64);
+        }
+    }
+}
+
+fn contract(window: WINDOW, line_offsets: &mut VecDeque<u64>) {
+    // Discard rows from the bottom if needed
+    line_offsets.truncate(1 + getmaxy(window) as usize);
+}
+
 fn rtrim(line: &mut String) {
     // Remove trailing newline if present
     if line.ends_with('\n') {
@@ -108,27 +134,12 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     wrefresh(superwindow);
 
     // The file position of each visible line
-    let mut line_offsets: VecDeque<u64> = VecDeque::new();
+    // There will be one more element representing the next line after the bottom row.
+    let mut line_offsets: VecDeque<u64>= VecDeque::from([0]);
 
     // Load and display the visible portion
-    let mut temp_pos = 0;
-    for i in 0 .. getmaxy(window) {
-        line_offsets.push_back(temp_pos);
-        let mut line = String::new();
-        if let Ok(n_bytes) = reader.read_line(&mut line) {
-            if n_bytes == 0 {
-                break; // EOF
-            }
-            temp_pos += n_bytes as u64;  // mark where the next line will begin
-            // Remove trailing newline
-            rtrim(&mut line);
-            // Draw the line
-            mvwaddnstr(window, i as i32, 0, &line, getmaxx(window));
+    expand(window, &mut line_offsets, &mut reader);
 
-            // record starting position
-        }
-    }
-    line_offsets.push_back(temp_pos);
     wrefresh(window);
     waddstr(w_debug, &format!("OPEN N:{} offsets:", line_offsets.len()));
     for i in &line_offsets {
@@ -208,6 +219,11 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
             // Handle terminal resize
             KEY_RESIZE => {
                 resize(w_debug, superwindow, window, file_path);
+                expand(window, &mut line_offsets, &mut reader);
+                contract(window, &mut line_offsets);
+                wrefresh(window);
+                waddstr(w_debug, &format!("N:{} H: {}\n", line_offsets.len(), getmaxy(window)));
+                wrefresh(w_debug);
             }
 
             // Escape or 'q' to quit
