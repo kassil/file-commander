@@ -7,44 +7,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// Skip exactly one line from the current position.
-/// Returns how many bytes were skipped.
-fn skip_line(file: &mut File) -> io::Result<u64> {
-    let mut buf = [0u8; 1];
-    let mut skipped = 0;
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break; // EOF
-        }
-        skipped += 1;
-        if buf[0] == b'\n' {
-            break; // end of line
-        }
-    }
-    Ok(skipped)
-}
-
-/// Read up to `max_lines` starting from current position.
-fn read_lines_from(file: &mut File, max_lines: usize, width: usize) -> io::Result<Vec<String>> {
-    let mut reader = BufReader::new(file.try_clone()?);
-    let mut lines = Vec::new();
-    while lines.len() < max_lines {
-        let mut line = String::new();
-        let bytes = reader.read_line(&mut line)?;
-        if bytes == 0 {
-            break; // EOF
-        }
-        // truncate if longer than screen width
-        if line.len() > width {
-            line.truncate(width);
-        }
-        lines.push(line.trim_end_matches('\n').to_string());
-    }
-    Ok(lines)
-}
-
-fn find_prev_line_start(w_debug: WINDOW, file: &mut File, file_pos: u64) -> std::io::Result<u64> {
+fn find_prev_line_start(w_debug: WINDOW, reader: &mut BufReader<File>, file_pos: u64) -> std::io::Result<u64> {
     if file_pos == 0 {
         // Already at start of file
         waddstr(w_debug, &format!("find_prev_line_start already at beginning\n"));
@@ -55,10 +18,10 @@ fn find_prev_line_start(w_debug: WINDOW, file: &mut File, file_pos: u64) -> std:
     // -1 to avoid re-reading current line's newline
     let backstep = 4096.min((file_pos - 1) as usize) as u64;
     let seek_pos = file_pos - backstep - 1; 
-    file.seek(SeekFrom::Start(seek_pos))?;
+    reader.seek(SeekFrom::Start(seek_pos))?;
 
     let mut buf = vec![0u8; backstep as usize];
-    let n = file.read(&mut buf)?;
+    let n = reader.read(&mut buf)?;
     let slice = &buf[..n];
 
     // search backward through slice
@@ -73,8 +36,50 @@ fn find_prev_line_start(w_debug: WINDOW, file: &mut File, file_pos: u64) -> std:
     }
 }
 
+fn calc_extents() -> (i32, i32, i32, i32) {
+
+    let scr_rows = getmaxy(stdscr());
+    let scr_cols = getmaxx(stdscr());
+    let height = scr_rows;
+    let width = scr_cols - scr_cols/2;
+    let startrow = 0;
+    let startcol = scr_cols/2;
+    (height, width, startrow, startcol)
+}
+
+fn resize(w_debug: WINDOW, superwindow: WINDOW, window: WINDOW, file_path: &Path) {
+    let (height, width, startrow, startcol) = calc_extents();
+
+    //werase(w_debug);
+    wresize(w_debug, height, width);
+
+    wresize(superwindow, height, width);
+    mvwin(superwindow, startrow, startcol);
+
+    wresize(window, height - 2, width - 2);
+    mvwin(window, startrow + 1, startcol + 1);
+
+    // Redraw border and title
+    box_(superwindow, 0, 0);
+    mvwaddstr(superwindow, 0, 2, &format!(" {} ", file_path.display()));
+    mvwaddstr(superwindow, height - 1, 2, "Up/Down to scroll, Esc or 'q' to close");
+    wrefresh(superwindow);
+}
+
+fn rtrim(line: &mut String) {
+    // Remove trailing newline if present
+    if line.ends_with('\n') {
+        line.pop(); // remove '\n'
+        if line.ends_with('\r') {
+            line.pop(); // remove '\r' for Windows CRLF
+        }
+    }
+}
+
 pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
+
     let mut file = match File::open(file_path) {
+
         Ok(f) => f,
         Err(e) => {
             waddstr(
@@ -85,10 +90,9 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
         }
     };
 
-    let mut height = 0;
-    let mut width = 0;
-    getmaxyx(w_debug, &mut height, &mut width);
+    let mut reader = BufReader::new(file);
 
+    let (height, width, startrow, startcol) = calc_extents();
     let superwindow = newwin(height, width, 0, width);
     let window = newwin(height-2, width-2, 1, width+1);
     scrollok(window, true);
@@ -102,75 +106,91 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     wrefresh(superwindow);
 
     let mut file_pos: u64 = 0; // where the top of screen begins
+    let mut pos_end: u64 = 0; // after the bottom of screen
     keypad(window, true);
 
-    // Position file and read visible window
-    file.seek(SeekFrom::Start(file_pos)).unwrap();
-    let lines = read_lines_from(&mut file, (height-2) as usize, (width - 2) as usize).unwrap();
-    werase(window);
-    for (i, line) in lines.iter().enumerate() {
-        mvwaddstr(window, i as i32, 0, line);
+    for i in 0 .. getmaxy(window) {
+        let mut line = String::new();
+        if let Ok(n_bytes) = reader.read_line(&mut line) {
+
+            if n_bytes == 0 {
+                break; // EOF
+            }
+            pos_end += n_bytes as u64;
+            rtrim(&mut line);
+            mvwaddnstr(window, i as i32, 0, &line, getmaxx(window));
+        }
     }
     wrefresh(window);
+    waddstr(w_debug, &format!("OPEN top:{} bot:{}\n", file_pos, pos_end));
 
     loop {
         wrefresh(w_debug); // Draw debug window below dialog
 
         match wgetch(window) {
             KEY_DOWN => {
-                // TODO Stop before document scrolls off screen!
-                file.seek(SeekFrom::Start(file_pos)).unwrap();
-                if let Ok(n) = skip_line(&mut file) {
-                    if n > 0 {
-                        waddstr(w_debug, &format!("KDOWN {} + {} = {} \n", file_pos, n, file_pos + n));
-                        file_pos += n;
+                // Advance top row
+                // TODO Maybe keep the positions of the visible lines?
+                reader.seek(SeekFrom::Start(file_pos)).unwrap();
+                file_pos += reader.skip_until(b'\n').unwrap() as u64;
 
-                        // Read one new line at bottom
-                        if let Ok(lines) = read_lines_from(&mut file, 1, width as usize) {
-                            if let Some(line) = lines.get(0) {
-                                wscrl(window, 1);
-                                mvwaddstr(window, height - 3, 0, line);
-                                wrefresh(window);
-                            }
-                        };
+                // Read a line
+                reader.seek(SeekFrom::Start(pos_end)).unwrap();
+                let mut line = String::new();
+                let result = reader.read_line(&mut line).unwrap();
+                //pos_end = reader.stream_position().unwrap() as u64;
+                pos_end += result as u64;
+
+                // Remove trailing newline if present
+                if line.ends_with('\n') {
+                    line.pop(); // remove '\n'
+                    if line.ends_with('\r') {
+                        line.pop(); // remove '\r' for Windows CRLF
                     }
-                }
+                }                
+                
+                // Draw the bottom row
+                wscrl(window, 1);
+                mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
+                wrefresh(window);
+
+                waddstr(w_debug, &format!("KDOWN top:{} bot:{}\n", file_pos, pos_end));
             }
+
             KEY_UP => {
-                if file_pos > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut file, file_pos) {
-                    waddstr(w_debug, &format!("KUP {} - {} = {}\n", file_pos, file_pos - new_pos, new_pos));
+                // Find the line before the top one
+                if file_pos > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, file_pos) {
+
+                    waddstr(w_debug, &format!("KUP line1_start:{} line1_len:{} line2_start:{} lineN_start:{}\n", new_pos, file_pos - new_pos, file_pos, pos_end));
                     file_pos = new_pos;
-                    file.seek(SeekFrom::Start(file_pos)).unwrap();
+                    reader.seek(SeekFrom::Start(file_pos));
                     // Read one new line at top
-                    if let Ok(lines) = read_lines_from(&mut file, 1, width as
-                    usize) {
-                        if let Some(line) = lines.get(0) {
-                            wscrl(window, -1);
-                            mvwaddstr(window, 0, 0, line);
-                            wrefresh(window);
-                        }
-                    };
+                    let mut line = String::new();
+                    if let Ok(n) = reader.read_line(&mut line) {
+
+                        // Remove trailing newline if present
+                        if line.ends_with('\n') {
+                            line.pop(); // remove '\n'
+                            if line.ends_with('\r') {
+                                line.pop(); // remove '\r' for Windows CRLF
+                            }
+                        }                
+
+                        wscrl(window, -1);
+                        mvwaddnstr(window, 0, 0, &line, getmaxx(window));
+                        wrefresh(window);                        
+                    }
+
+                    // Find the line before the bottom one
+                    if let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, pos_end) {
+                        pos_end = new_pos;
+                    }
                 }
             }
 
             // Handle terminal resize
             KEY_RESIZE => {
-                let scr_rows = getmaxy(stdscr());
-                let scr_cols = getmaxx(stdscr());
-                //werase(w_debug);
-                wresize(w_debug, scr_rows, scr_cols/2);
-
-                wresize(superwindow, scr_rows, scr_cols - scr_cols/2);
-                mvwin(superwindow, 0, scr_cols/2);
-
-                wresize(window, scr_rows-2, scr_cols - scr_cols/2 - 2);
-                mvwin(window, 1, scr_cols/2 + 1);
-
-                // Redraw border and title
-                box_(superwindow, 0, 0);
-                mvwaddstr(superwindow, 0, 2, &format!(" {} ", file_path.display()));
-                mvwaddstr(superwindow, scr_rows-1, 2, "Up/Down to scroll, Esc or 'q' to close");
-                wrefresh(superwindow);
+                resize(w_debug, superwindow, window, file_path);
             }
 
             // Escape or 'q' to quit
