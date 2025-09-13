@@ -105,8 +105,8 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     mvwaddstr(superwindow, height-1, 2, "Up/Down to scroll, Esc or 'q' to close");
     wrefresh(superwindow);
 
-    let mut file_pos: u64 = 0; // where the top of screen begins
-    let mut pos_end: u64 = 0; // after the bottom of screen
+    let mut top_file_pos: u64 = 0; // where the top of screen begins
+    let mut bot_file_pos: u64 = 0; // after the bottom of screen
     keypad(window, true);
 
     for i in 0 .. getmaxy(window) {
@@ -116,13 +116,13 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
             if n_bytes == 0 {
                 break; // EOF
             }
-            pos_end += n_bytes as u64;
+            bot_file_pos += n_bytes as u64;
             rtrim(&mut line);
             mvwaddnstr(window, i as i32, 0, &line, getmaxx(window));
         }
     }
     wrefresh(window);
-    waddstr(w_debug, &format!("OPEN top:{} bot:{}\n", file_pos, pos_end));
+    waddstr(w_debug, &format!("OPEN top:{} bot:{}\n", top_file_pos, bot_file_pos));
 
     loop {
         wrefresh(w_debug); // Draw debug window below dialog
@@ -131,15 +131,15 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
             KEY_DOWN => {
                 // Advance top row
                 // TODO Maybe keep the positions of the visible lines?
-                reader.seek(SeekFrom::Start(file_pos)).unwrap();
-                file_pos += reader.skip_until(b'\n').unwrap() as u64;
+                reader.seek(SeekFrom::Start(top_file_pos)).unwrap();
+                top_file_pos += reader.skip_until(b'\n').unwrap() as u64;
 
                 // Read a line
-                reader.seek(SeekFrom::Start(pos_end)).unwrap();
+                reader.seek(SeekFrom::Start(bot_file_pos)).unwrap();
                 let mut line = String::new();
                 let result = reader.read_line(&mut line).unwrap();
-                //pos_end = reader.stream_position().unwrap() as u64;
-                pos_end += result as u64;
+                //bot_file_pos = reader.stream_position().unwrap() as u64;
+                bot_file_pos += result as u64;
 
                 // Remove trailing newline if present
                 if line.ends_with('\n') {
@@ -154,16 +154,16 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                 mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
                 wrefresh(window);
 
-                waddstr(w_debug, &format!("KDOWN top:{} bot:{}\n", file_pos, pos_end));
+                waddstr(w_debug, &format!("KDOWN top:{} bot:{}\n", top_file_pos, bot_file_pos));
             }
 
             KEY_UP => {
                 // Find the line before the top one
-                if file_pos > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, file_pos) {
+                if top_file_pos > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, top_file_pos) {
 
-                    waddstr(w_debug, &format!("KUP line1_start:{} line1_len:{} line2_start:{} lineN_start:{}\n", new_pos, file_pos - new_pos, file_pos, pos_end));
-                    file_pos = new_pos;
-                    reader.seek(SeekFrom::Start(file_pos));
+                    waddstr(w_debug, &format!("KUP line1_start:{} line1_len:{} line2_start:{} lineN_start:{}\n", new_pos, top_file_pos - new_pos, top_file_pos, bot_file_pos));
+                    top_file_pos = new_pos;
+                    reader.seek(SeekFrom::Start(top_file_pos));
                     // Read one new line at top
                     let mut line = String::new();
                     if let Ok(n) = reader.read_line(&mut line) {
@@ -182,8 +182,8 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                     }
 
                     // Find the line before the bottom one
-                    if let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, pos_end) {
-                        pos_end = new_pos;
+                    if let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, bot_file_pos) {
+                        bot_file_pos = new_pos;
                     }
                 }
             }
