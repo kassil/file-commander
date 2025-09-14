@@ -41,10 +41,10 @@ fn calc_extents() -> (i32, i32, i32, i32) {
 
     let scr_rows = getmaxy(stdscr());
     let scr_cols = getmaxx(stdscr());
-    let height = scr_rows;
-    let width = scr_cols - scr_cols/2;
+    let height   = scr_rows.max(3);            // clamp minimum height
+    let width    = (scr_cols - scr_cols / 2).max(4); // clamp minimum width
     let startrow = 0;
-    let startcol = scr_cols/2;
+    let startcol = (scr_cols / 2).max(0);      // just to be safe, nonnegative
     (height, width, startrow, startcol)
 }
 
