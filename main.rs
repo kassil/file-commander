@@ -169,6 +169,49 @@ impl DirView {
     }
 }
 
+fn scroll_down(w_debug: WINDOW, dirview: &mut DirView) {
+    if let Ok(ref list) = dirview.dirents {
+        if dirview.selected + 1 < list.len() {
+            let view_height = (getmaxy(dirview.window) - 2) as usize; // Adjust for borders
+            // Move cursor down to next entry
+            dirview.selected += 1;
+            if dirview.selected >= dirview.scroll_offset + view_height {
+                // Scroll down
+                dirview.scroll_offset += 1;
+            }
+            waddstr(w_debug, &format!("KDOWN Beg:{} Sel:{} End:{}\n", dirview.scroll_offset, dirview.selected, dirview.scroll_offset + view_height));
+            dirview.dirty = true;
+        }
+        else {
+            beep();  // Cannot move below last entry
+        }
+    }
+    else {
+        beep();  // No entries, cannot move
+    }
+}
+
+fn scroll_up(w_debug: WINDOW, dirview: &mut DirView) {
+    if let Ok(ref _list) = dirview.dirents {
+        if dirview.selected > 0 {
+            // Move cursor up to previous entry
+            dirview.selected -= 1;
+            if dirview.selected < dirview.scroll_offset {
+                // Scroll up
+                dirview.scroll_offset -= 1;
+            }
+            let view_height = (getmaxy(dirview.window) - 2) as usize; // Adjust for borders
+            waddstr(w_debug, &format!("KUP Beg:{} Sel:{} End:{}\n", dirview.scroll_offset, dirview.selected, dirview.scroll_offset + view_height));
+            dirview.dirty = true;
+        } else {
+            beep();  // Cannot move above first entry
+        }
+    }
+    else {
+        beep();  // No entries, cannot move
+    }
+}
+
 fn main() {
     initscr();
     noecho();
@@ -214,45 +257,10 @@ fn main() {
         let ch = wgetch(dirview.window);
         match ch {
             KEY_UP => {
-                if let Ok(ref _list) = dirview.dirents {
-                    if dirview.selected > 0 {
-                        // Move cursor up to previous entry
-                        dirview.selected -= 1;
-                        if dirview.selected < dirview.scroll_offset {
-                            // Scroll up
-                            dirview.scroll_offset -= 1;
-                        }
-                        let view_height = (getmaxy(dirview.window) - 2) as usize; // Adjust for borders
-                        waddstr(w_debug, &format!("KUP Beg:{} Sel:{} End:{}\n", dirview.scroll_offset, dirview.selected, dirview.scroll_offset + view_height));
-                        dirview.dirty = true;
-                    } else {
-                        beep();  // Cannot move above first entry
-                    }
-                }
-                else {
-                    beep();  // No entries, cannot move
-                }
+                scroll_up(w_debug, &mut dirview);
             }
             KEY_DOWN => {
-                if let Ok(ref list) = dirview.dirents {
-                    if dirview.selected + 1 < list.len() {
-                        let view_height = (getmaxy(dirview.window) - 2) as usize; // Adjust for borders
-                        // Move cursor down to next entry
-                        dirview.selected += 1;
-                        if dirview.selected >= dirview.scroll_offset + view_height {
-                            // Scroll down
-                            dirview.scroll_offset += 1;
-                        }
-                        waddstr(w_debug, &format!("KDOWN Beg:{} Sel:{} End:{}\n", dirview.scroll_offset, dirview.selected, dirview.scroll_offset + view_height));
-                        dirview.dirty = true;
-                    }
-                    else {
-                        beep();  // Cannot move below last entry
-                    }
-                }
-                else {
-                    beep();  // No entries, cannot move
-                }
+                scroll_down(w_debug, &mut dirview);
             }
             KEY_ENTER | 10 | 13 => {  // Handle different ENTER representations
                 if let Ok(ref elements) = dirview.dirents {
