@@ -51,7 +51,6 @@ fn calc_extents() -> (i32, i32, i32, i32) {
 fn resize(w_debug: WINDOW, superwindow: WINDOW, window: WINDOW, file_path: &Path) {
     let (height, width, startrow, startcol) = calc_extents();
 
-    //werase(w_debug);
     wresize(w_debug, height, width);
 
     wresize(superwindow, height, width);
@@ -67,10 +66,28 @@ fn resize(w_debug: WINDOW, superwindow: WINDOW, window: WINDOW, file_path: &Path
     wrefresh(superwindow);
 }
 
-fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) {
+fn expand_cols(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>, n_cols: &mut i32) -> bool {
+
+    let old_n_cols = *n_cols;
+    let new_n_cols = getmaxx(window);
+    *n_cols = new_n_cols;
+
+    if old_n_cols < new_n_cols {
+        // Window grew wider
+        line_offsets.truncate(1);
+        reader.seek(SeekFrom::Start(*line_offsets.get(0).unwrap()));
+        expand_rows(window, line_offsets, reader);
+        true
+    }
+    else {
+        false
+    }
+}
+
+fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) -> bool {
 
     let n_lines = (1 + getmaxy(window) - line_offsets.len() as i32).max(0) as usize;
-    for _ in 0 .. n_lines { //line_offsets.len() .. line_offsets.len() + n_lines {
+    for _ in 0 .. n_lines {
         let pos = *line_offsets.back().unwrap();
         let mut line = String::new();
         if let Ok(n_bytes) = reader.read_line(&mut line) {
@@ -86,11 +103,18 @@ fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut Bu
             line_offsets.push_back(pos + n_bytes as u64);
         }
     }
+    return n_lines != 0;
 }
 
-fn contract_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>) {
+fn contract_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>) -> bool {
     // Discard rows from the bottom if needed
-    line_offsets.truncate(1 + getmaxy(window) as usize);
+    let desired_len = 1 + getmaxy(window) as usize;
+    if line_offsets.len() >= desired_len {
+        line_offsets.truncate(desired_len);
+        true
+    } else {
+        false
+    }
 }
 
 fn rtrim(line: &mut String) {
@@ -186,6 +210,7 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     let (height, width, startrow, startcol) = calc_extents();
     let superwindow = newwin(height, width, startrow, startcol);
     let window = newwin(height-2, width-2, startrow+1, startcol+1);
+    let mut n_cols = width-2;
     scrollok(window, true);
     keypad(window, true);
     wattron(window, COLOR_PAIR(1));
@@ -228,8 +253,9 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
             // Handle terminal resize
             KEY_RESIZE => {
                 resize(w_debug, superwindow, window, &file_path);
-                expand_rows(window, &mut line_offsets, &mut reader);
-                contract_rows(window, &mut line_offsets);
+                expand_cols(window, &mut line_offsets, &mut reader, &mut n_cols)
+                || expand_rows(window, &mut line_offsets, &mut reader)
+                || contract_rows(window, &mut line_offsets);
                 wrefresh(window);
                 waddstr(w_debug, &format!("N:{} H: {}\n", line_offsets.len(), getmaxy(window)));
                 wrefresh(w_debug);
