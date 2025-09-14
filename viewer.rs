@@ -188,6 +188,8 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     let window = newwin(height-2, width-2, startrow+1, startcol+1);
     scrollok(window, true);
     keypad(window, true);
+    wattron(window, COLOR_PAIR(1));
+    wbkgd(window, COLOR_PAIR(1));
 
     // Box around window
     box_(superwindow, 0, 0);

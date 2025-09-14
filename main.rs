@@ -66,8 +66,10 @@ impl DirView {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "Dirview height and width must be at least 3"));
         }
         let window = newwin(win_height, win_width, win_starty, win_startx);
+        wattron(window, COLOR_PAIR(1));
         keypad(window, true);
         scrollok(window, true);
+        wbkgd(window, COLOR_PAIR(1));
         let mut dirview = DirView {
             window,
             selected: 0,
@@ -217,9 +219,8 @@ fn main() {
     noecho();
     curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
     start_color();
-    init_pair(1, COLOR_WHITE, COLOR_BLACK);
-    init_pair(2, COLOR_BLUE, COLOR_BLACK);
-    //init_pair(2, COLOR_YELLOW, COLOR_BLACK);
+    init_pair(1, COLOR_WHITE, COLOR_BLUE);      // Regular files
+    init_pair(2, COLOR_YELLOW, COLOR_BLUE);     // Directories
 
     let w_debug = newwin(getmaxy(stdscr()), getmaxx(stdscr())/2, 0, 0);
     if w_debug.is_null() {
