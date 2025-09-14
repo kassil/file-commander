@@ -67,7 +67,7 @@ fn resize(w_debug: WINDOW, superwindow: WINDOW, window: WINDOW, file_path: &Path
     wrefresh(superwindow);
 }
 
-fn expand(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) {
+fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) {
 
     let n_lines = (1 + getmaxy(window) - line_offsets.len() as i32).max(0) as usize;
     for _ in 0 .. n_lines { //line_offsets.len() .. line_offsets.len() + n_lines {
@@ -88,7 +88,7 @@ fn expand(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufRead
     }
 }
 
-fn contract(window: WINDOW, line_offsets: &mut VecDeque<u64>) {
+fn contract_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>) {
     // Discard rows from the bottom if needed
     line_offsets.truncate(1 + getmaxy(window) as usize);
 }
@@ -103,10 +103,74 @@ fn rtrim(line: &mut String) {
     }
 }
 
+fn scroll_down(w_debug: WINDOW, window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) {
+    // Rust note: copy the element, otherwise we'd hold an immut reference to the list.
+    let bot_file_pos = *line_offsets.back().unwrap();
+    // Read a line
+    reader.seek(SeekFrom::Start(bot_file_pos));
+    let mut line = String::new();
+    let line_n_bytes = reader.read_line(&mut line).unwrap();
+    if line_n_bytes == 0 {
+        // EOF: cannot scroll down
+        beep();
+    }
+    else {
+        // Remove the old top row
+        line_offsets.pop_front();
+        // Add the new bottom row
+        line_offsets.push_back(bot_file_pos + line_n_bytes as u64);
+
+        // Remove trailing newline if present
+        if line.ends_with('\n') {
+            line.pop(); // remove '\n'
+            if line.ends_with('\r') {
+                line.pop(); // remove '\r' for Windows CRLF
+            }
+        }
+
+        // Draw the bottom row
+        wscrl(window, 1);
+        mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
+        wrefresh(window);
+
+        waddstr(w_debug, &format!("KDOWN top:{} bot:{} n:{}\n", line_offsets.front().unwrap(), line_offsets.back().unwrap(), line_offsets.len()));
+    }
+}
+
+fn scroll_up(w_debug: WINDOW, window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) {
+    // Find the line before the top one
+    // if line_offsets.front() and ...
+    if *line_offsets.front().unwrap() > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, reader, *line_offsets.front().unwrap()) {
+
+        // Advance bottom row
+        line_offsets.pop_back();
+        line_offsets.push_front(new_pos);
+
+        waddstr(w_debug, &format!("KUP top:{} bot:{} N:{}\n",
+            *line_offsets.front().unwrap(), *line_offsets.back().unwrap(), line_offsets.len()));
+        reader.seek(SeekFrom::Start(new_pos));
+        // Read one new line at top
+        let mut line = String::new();
+        if let Ok(_line_n_bytes) = reader.read_line(&mut line) {
+
+            // Remove trailing newline if present
+            if line.ends_with('\n') {
+                line.pop(); // remove '\n'
+                if line.ends_with('\r') {
+                    line.pop(); // remove '\r' for Windows CRLF
+                }
+            }
+
+            wscrl(window, -1);
+            mvwaddnstr(window, 0, 0, &line, getmaxx(window));
+            wrefresh(window);
+        }
+    }
+}
+
 pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
 
     let file = match File::open(file_path) {
-
         Ok(f) => f,
         Err(e) => {
             waddstr(
@@ -138,9 +202,9 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     let mut line_offsets: VecDeque<u64>= VecDeque::from([0]);
 
     // Load and display the visible portion
-    expand(window, &mut line_offsets, &mut reader);
-
+    expand_rows(window, &mut line_offsets, &mut reader);
     wrefresh(window);
+
     waddstr(w_debug, &format!("OPEN N:{} offsets:", line_offsets.len()));
     for i in &line_offsets {
         waddstr(w_debug, &format!(" {}", i));
@@ -152,75 +216,18 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
 
         match wgetch(window) {
             KEY_DOWN => {
-                // Rust note: copy the element, otherwise we'd hold an immut reference to the list.
-                let bot_file_pos = *line_offsets.back().unwrap();
-                // Read a line
-                reader.seek(SeekFrom::Start(bot_file_pos));
-                let mut line = String::new();
-                let line_n_bytes = reader.read_line(&mut line).unwrap();
-                if line_n_bytes == 0 {
-                    // EOF: cannot scroll down
-                    beep();
-                }
-                else {
-                    // Remove the old top row
-                    line_offsets.pop_front();
-                    // Add the new bottom row
-                    line_offsets.push_back(bot_file_pos + line_n_bytes as u64);
-
-                    // Remove trailing newline if present
-                    if line.ends_with('\n') {
-                        line.pop(); // remove '\n'
-                        if line.ends_with('\r') {
-                            line.pop(); // remove '\r' for Windows CRLF
-                        }
-                    }
-
-                    // Draw the bottom row
-                    wscrl(window, 1);
-                    mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
-                    wrefresh(window);
-
-                    waddstr(w_debug, &format!("KDOWN top:{} bot:{} n:{}\n", line_offsets.front().unwrap(), line_offsets.back().unwrap(), line_offsets.len()));
-                }
+                scroll_down(w_debug, window, &mut line_offsets, &mut reader);
             }
 
             KEY_UP => {
-                // Find the line before the top one
-                // if line_offsets.front() and ...
-                if *line_offsets.front().unwrap() > 0 && let Ok(new_pos) = find_prev_line_start(w_debug, &mut reader, *line_offsets.front().unwrap()) {
-
-                    // Advance bottom row
-                    line_offsets.pop_back();
-                    line_offsets.push_front(new_pos);
-
-                    waddstr(w_debug, &format!("KUP top:{} bot:{} N:{}\n",
-                        *line_offsets.front().unwrap(), *line_offsets.back().unwrap(), line_offsets.len()));
-                    reader.seek(SeekFrom::Start(new_pos));
-                    // Read one new line at top
-                    let mut line = String::new();
-                    if let Ok(_line_n_bytes) = reader.read_line(&mut line) {
-
-                        // Remove trailing newline if present
-                        if line.ends_with('\n') {
-                            line.pop(); // remove '\n'
-                            if line.ends_with('\r') {
-                                line.pop(); // remove '\r' for Windows CRLF
-                            }
-                        }
-
-                        wscrl(window, -1);
-                        mvwaddnstr(window, 0, 0, &line, getmaxx(window));
-                        wrefresh(window);
-                    }
-                }
+                scroll_up(w_debug, window, &mut line_offsets, &mut reader);
             }
 
             // Handle terminal resize
             KEY_RESIZE => {
-                resize(w_debug, superwindow, window, file_path);
-                expand(window, &mut line_offsets, &mut reader);
-                contract(window, &mut line_offsets);
+                resize(w_debug, superwindow, window, &file_path);
+                expand_rows(window, &mut line_offsets, &mut reader);
+                contract_rows(window, &mut line_offsets);
                 wrefresh(window);
                 waddstr(w_debug, &format!("N:{} H: {}\n", line_offsets.len(), getmaxy(window)));
                 wrefresh(w_debug);
