@@ -86,6 +86,13 @@ fn expand_cols(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut Bu
 
 fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut BufReader<File>) -> bool {
 
+    // Check preconditions
+    if is_scrollok(window) {
+        panic!("expand_rows: is_scrollok is true");
+    }
+    if line_offsets.len() == 0 {
+        panic!("expand_rows: line_offsets is empty");
+    }
     let n_lines = (1 + getmaxy(window) - line_offsets.len() as i32).max(0) as usize;
     for _ in 0 .. n_lines {
         let pos = *line_offsets.back().unwrap();
@@ -96,11 +103,15 @@ fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut Bu
             }
             // Remove trailing newline
             rtrim(&mut line);
-            // Draw the line
+            // Draw the row
             mvwaddnstr(window, line_offsets.len() as i32 - 1, 0, &line, getmaxx(window));
 
             // mark where the next line will begin
             line_offsets.push_back(pos + n_bytes as u64);
+        }
+        else {
+            // Some IO error?
+            break;
         }
     }
     return n_lines != 0;
@@ -152,12 +163,15 @@ fn scroll_down(w_debug: WINDOW, window: WINDOW, line_offsets: &mut VecDeque<u64>
             }
         }
 
-        // Draw the bottom row
+        scrollok(window, true);     // Temporarily enable scroll
         wscrl(window, 1);
+        scrollok(window, false);
+        // Draw the bottom row
         mvwaddnstr(window, getmaxy(window) - 1, 0, &line, getmaxx(window));
         wrefresh(window);
 
         waddstr(w_debug, &format!("KDOWN top:{} bot:{} n:{}\n", line_offsets.front().unwrap(), line_offsets.back().unwrap(), line_offsets.len()));
+        wrefresh(w_debug);
     }
 }
 
@@ -172,6 +186,7 @@ fn scroll_up(w_debug: WINDOW, window: WINDOW, line_offsets: &mut VecDeque<u64>, 
 
         waddstr(w_debug, &format!("KUP top:{} bot:{} N:{}\n",
             *line_offsets.front().unwrap(), *line_offsets.back().unwrap(), line_offsets.len()));
+        wrefresh(w_debug);
         reader.seek(SeekFrom::Start(new_pos));
         // Read one new line at top
         let mut line = String::new();
@@ -185,7 +200,10 @@ fn scroll_up(w_debug: WINDOW, window: WINDOW, line_offsets: &mut VecDeque<u64>, 
                 }
             }
 
+            scrollok(window, true); // temporarily enable scrolling
             wscrl(window, -1);
+            scrollok(window, false);
+            // Draw the top row
             mvwaddnstr(window, 0, 0, &line, getmaxx(window));
             wrefresh(window);
         }
@@ -201,6 +219,7 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                 w_debug,
                 &format!("Error opening file {}: {}\n", file_path.display(), e),
             );
+            wrefresh(w_debug);
             return;
         }
     };
@@ -211,7 +230,7 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
     let superwindow = newwin(height, width, startrow, startcol);
     let window = newwin(height-2, width-2, startrow+1, startcol+1);
     let mut n_cols = width-2;
-    scrollok(window, true);
+    scrollok(window, false);
     keypad(window, true);
     wattron(window, COLOR_PAIR(1));
     wbkgd(window, COLOR_PAIR(1));
@@ -237,10 +256,9 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
         waddstr(w_debug, &format!(" {}", i));
     }
     waddstr(w_debug, "\n");
+    wrefresh(w_debug);
 
     loop {
-        wrefresh(w_debug); // Draw debug window below dialog
-
         match wgetch(window) {
             KEY_DOWN => {
                 scroll_down(w_debug, window, &mut line_offsets, &mut reader);
@@ -250,6 +268,15 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                 scroll_up(w_debug, window, &mut line_offsets, &mut reader);
             }
 
+            114 => {
+                waddstr(w_debug, &format!("N:{} H:{}", line_offsets.len(), getmaxy(window)));
+                for i in &line_offsets {
+                    waddstr(w_debug, &format!(" {}", i));
+                }
+                waddstr(w_debug, "\n");
+                wrefresh(w_debug);
+            }
+
             // Handle terminal resize
             KEY_RESIZE => {
                 resize(w_debug, superwindow, window, &file_path);
@@ -257,7 +284,11 @@ pub fn view_file_modal(w_debug: WINDOW, file_path: &Path) {
                 || expand_rows(window, &mut line_offsets, &mut reader)
                 || contract_rows(window, &mut line_offsets);
                 wrefresh(window);
-                waddstr(w_debug, &format!("N:{} H: {}\n", line_offsets.len(), getmaxy(window)));
+                waddstr(w_debug, &format!("N:{} H:{}", line_offsets.len(), getmaxy(window)));
+                for i in &line_offsets {
+                    waddstr(w_debug, &format!(" {}", i));
+                }
+                waddstr(w_debug, "\n");
                 wrefresh(w_debug);
             }
 
