@@ -11,7 +11,7 @@ use std::path::Path;
 fn find_prev_line_start(w_debug: WINDOW, reader: &mut BufReader<File>, file_pos: u64) -> std::io::Result<u64> {
     if file_pos == 0 {
         // Already at start of file
-        waddstr(w_debug, &format!("find_prev_line_start already at beginning\n"));
+        waddstr(w_debug, &format!("find_prev_line_start: already at front\n"));
         return Ok(0);
     }
 
@@ -28,11 +28,11 @@ fn find_prev_line_start(w_debug: WINDOW, reader: &mut BufReader<File>, file_pos:
     // search backward through slice
     if let Some(rel_idx) = slice.iter().rposition(|&b| b == b'\n') {
         // newline found — line starts right after it
-        waddstr(w_debug, &format!("find_prev_line_start found {} + {} = {}\n", seek_pos, rel_idx, seek_pos + rel_idx as u64 + 1));
+        waddstr(w_debug, &format!("find_prev_line_start: found {} + {} = {}\n", seek_pos, rel_idx, seek_pos + rel_idx as u64 + 1));
         Ok(seek_pos + rel_idx as u64 + 1 as u64)
     } else {
         // no newline — in middle of first line, or we didn't go back far enough
-        waddstr(w_debug, &format!("find_prev_line_start no newline found before {}!\n", file_pos));
+        waddstr(w_debug, &format!("find_prev_line_start: not found in pos {} .. {} fp={}\n", seek_pos, seek_pos+n as u64, file_pos));
         Ok(0)
     }
 }
