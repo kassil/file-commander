@@ -75,7 +75,6 @@ fn expand_cols(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut Bu
     if old_n_cols < new_n_cols {
         // Window grew wider
         line_offsets.truncate(1);
-        reader.seek(SeekFrom::Start(*line_offsets.get(0).unwrap()));
         expand_rows(window, line_offsets, reader);
         true
     }
@@ -94,6 +93,10 @@ fn expand_rows(window: WINDOW, line_offsets: &mut VecDeque<u64>, reader: &mut Bu
         panic!("expand_rows: line_offsets is empty");
     }
     let n_lines = (1 + getmaxy(window) - line_offsets.len() as i32).max(0) as usize;
+    if n_lines > 0 {
+        // Move to the last visible line
+        reader.seek(SeekFrom::Start(*line_offsets.back().unwrap()));
+    }
     for _ in 0 .. n_lines {
         let pos = *line_offsets.back().unwrap();
         let mut line = String::new();
